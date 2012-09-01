@@ -27,8 +27,8 @@ class Type(object):
         return self.caster(value, length, cursor)
 
 
-def register_type(type_obj, scope=None):
-    typecasts = string_types
+def register_type(type_obj, scope=None, fmt=0):
+    typecasts = binary_types if fmt else string_types
     if scope:
         from psycopg2ct._impl.connection import Connection
         from psycopg2ct._impl.cursor import Cursor
@@ -332,12 +332,11 @@ def Binary(obj):
     return Binary(obj)
 
 
-def _default_type(name, oids, caster):
+def _default_type(name, oids, caster, fmt=0):
     """Shortcut to register internal types"""
     type_obj = Type(name, oids, caster)
-    register_type(type_obj)
+    register_type(type_obj, fmt=fmt)
     return type_obj
-
 
 # DB API 2.0 types
 BINARY = _default_type('BINARY', [17], parse_binary)
@@ -385,5 +384,117 @@ TIMEARRAY = _default_type(
 
 
 UNICODE = Type('UNICODE', [19, 18, 25, 1042, 1043], parse_unicode)
-UNICODEARRAY = Type('UNICODEARRAY', [1002, 1003, 1009, 1014, 1015],
-    parse_array(UNICODE))
+UNICODEARRAY = Type('UNICODEARRAY', [1002, 1003, 1009, 1014, 1015], parse_array(UNICODE))
+
+###
+from ctypes import *
+import struct
+from pytz import utc
+
+def parse_int(value, length, cursor):
+    if length == 2:
+        return struct.unpack('!h', value[:length])[0]
+    if length == 4:
+        return struct.unpack('!i', value[:length])[0]
+    if length == 8:
+        return struct.unpack("!q", value[:length])[0]
+    raise ValueError('Unexpected length for INT type: %d' % length)
+
+def parse_bool(value, length, cursor):
+    return value[0] == '\x01'
+
+def parse_float(value, length, cursor):
+    if length == 4:
+        return struct.unpack('!q', value[:length])[0]
+    if length == 8:
+        return struct.unpack('!d', value[:length])[0]
+    raise ValueError('Unexpected length for FLOAT type: %d' % length)
+
+def parse_numeric(value, length, cursor):
+    num_digits, weight, sign, dscale = struct.unpack("!hhhh", value[:8])
+    digits = struct.unpack("!" + ("h" * num_digits), value[8:length])
+    weight = decimal.Decimal(weight)
+    retval = decimal.Decimal(0)
+    for d in digits:
+        d = decimal.Decimal(d)
+        retval += d * (10000 ** weight)
+        weight -= 1
+    if sign:
+        retval *= -1
+    return retval.quantize(decimal.Decimal(10) ** -dscale)
+
+# XXX How do we determine this?
+integer_datetimes = False
+integer_datetimes = True
+
+def parse_timestamp(value, length, cursor):
+    if integer_datetimes:
+        # data is 64-bit integer representing milliseconds since 2000-01-01
+        val = struct.unpack('!q', value[:length])[0]
+        return datetime.datetime(2000, 1, 1) + datetime.timedelta(microseconds = val)
+    else:
+        # data is double-precision float representing seconds since 2000-01-01
+        val = struct.unpack('!d', value[:length])[0]
+        return datetime.datetime(2000, 1, 1) + datetime.timedelta(seconds = val)
+
+def parse_timestamptz(value, length, cursor):
+    # XXX For backward compatibility, we return a naive value
+    return parse_timestamp(value, length, cursor)
+    #return parse_timestamp(value, length, cursor).replace(tzinfo=utc)
+
+def parse_bunicode(value, length, cursor):
+    return parse_unicode(value[:length], length, cursor)
+
+def parse_interval(value, length, cursor):
+    if integer_datetimes:
+        microseconds, days, months = struct.unpack("!qii", value[:length])
+        seconds=0
+    else:
+        seconds, days, months = struct.unpack("!dii", value[:length])
+        microseconds = 0
+    return datetime.timedelta(days=(months*30)+days, seconds=seconds, microseconds=microseconds)
+
+def parse_date(value, length, cursor):
+    # Stored as days since 2000-1-1
+    val = struct.unpack('!i', value[:length])[0]
+    return datetime.date(2000,1,1) + datetime.timedelta(days=val)
+
+def parse_record(value, length, cursor):
+    # This is why we're here, folks...
+    data = value[:length]
+    result = []
+    # XXX Field names?
+    nfields = struct.unpack('!i', data[:4])
+    data = data[4:]
+    while len(data):
+        # Get the OID and length
+        oid, olen = struct.unpack('!ii', data[:8])
+        data = data[8:]
+        # Remove value date
+        val = data[:olen]
+        data = data[olen:]
+        # Convert
+        result.append(
+            typecast(binary_types[oid], val, olen, cursor)
+        )
+    return result
+
+def parse_inet(value, length, cursor):
+    ip_family, ip_bits, is_cidr, dlen = struct.unpack('bbb', value[:3])
+    addr = struct.unpack('b' * dlen, value[3:length])
+    needs['inet'].append(
+        (ip_family, ip_bits, is_cidr, dlen, addr,)
+    )
+    return ''
+
+B_INT = _default_type('B_INT', [20, 21, 23], parse_int, 1)
+B_UNICODE = _default_type('B_UNICODE', [19, 18, 25, 1042, 1043], parse_bunicode, 1)
+B_BOOL = _default_type('B_BOOL', [16], parse_bool, 1)
+B_FLOAT = _default_type('B_FLOAT', [700, 701], parse_float, 1)
+B_NUMERIC = _default_type('B_NUMERIC', [1700], parse_numeric, 1)
+B_DATE = _default_type('B_DATE', [1082], parse_date, 1)
+B_TIMESTAMP = _default_type('B_TIMESTAMP', [1115], parse_timestamp, 1)
+B_TIMESTAMPTZ = _default_type('B_TIMESTAMPTZ', [1184], parse_timestamptz, 1)
+B_INTERVAL = _default_type('B_INTERVAL', [1186], parse_interval, 1)
+B_RECORD = _default_type('B_RECORD', [2249], parse_record, 1)
+B_INET = _default_type('B_INET', [869], parse_inet, 1)
