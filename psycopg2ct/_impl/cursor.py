@@ -12,7 +12,6 @@ from psycopg2ct._impl import util
 from psycopg2ct._impl.adapters import _getquoted
 from psycopg2ct._impl.exceptions import InterfaceError, ProgrammingError
 
-
 def check_closed(func):
     """Check if the connection is closed and raise an error"""
     @wraps(func)
@@ -651,7 +650,7 @@ class Cursor(object):
         if not async:
             with self._conn._lock:
                 if not self._conn._have_wait_callback():
-                    self._pgres = libpq.PQexec(pgconn, query)
+                    self._pgres = libpq.PQexecParams(pgconn, query, 0, None, None, None, None, 1)
                 else:
                     self._pgres = self._conn._execute_green(query)
                 if not self._pgres:
@@ -722,6 +721,7 @@ class Cursor(object):
             description = []
             casts = []
             for i in xrange(self._nfields):
+                ffmt = libpq.PQfformat(self._pgres, i)
                 ftype = libpq.PQftype(self._pgres, i)
                 fsize = libpq.PQfsize(self._pgres, i)
                 fmod = libpq.PQfmod(self._pgres, i)
@@ -742,7 +742,7 @@ class Cursor(object):
                 else:
                     prec = scale = None
 
-                casts.append(self._get_cast(ftype))
+                casts.append(self._get_cast(ftype, ffmt))
                 description.append(Column(
                     name=libpq.PQfname(self._pgres, i),
                     type_code=ftype,
@@ -822,8 +822,8 @@ class Cursor(object):
 
             # PQgetvalue will return an empty string for null values,
             # so check with PQgetisnull if the value is really null
-            val = libpq.PQgetvalue(self._pgres, row_num, i)
-            if not val and libpq.PQgetisnull(self._pgres, row_num, i):
+            val = libpq.PQgetvalueb(self._pgres, row_num, i)
+            if libpq.PQgetisnull(self._pgres, row_num, i):
                 val = None
             else:
                 length = libpq.PQgetlength(self._pgres, row_num, i)
@@ -834,17 +834,14 @@ class Cursor(object):
             return tuple(row)
         return row
 
-    def _get_cast(self, oid):
+    def _get_cast(self, oid, ffmt=0):
         try:
-            return self._typecasts[oid]
+            if ffmt:
+                return typecasts.binary_types[oid]
+            else:
+                return typecasts.string_types[oid]
         except KeyError:
-            try:
-                return self._conn._typecasts[oid]
-            except KeyError:
-                try:
-                    return typecasts.string_types[oid]
-                except KeyError:
-                    return typecasts.string_types[705]
+            return typecasts.string_types[705]
 
 
 def _combine_cmd_params(cmd, params, conn):
