@@ -142,6 +142,10 @@ PQexec = libpq.PQexec
 PQexec.argtypes = [PGconn_p, c_char_p]
 PQexec.restype = PGresult_p
 
+PQexecParams = libpq.PQexecParams
+PQexecParams.argtypes = [PGconn_p, c_char_p, c_int, POINTER(c_uint), POINTER(c_char_p), POINTER(c_int), POINTER(c_int), c_int]
+PQexecParams.restype = PGresult_p
+
 PQresultStatus = libpq.PQresultStatus
 PQresultStatus.argtypes = [PGresult_p]
 PQresultStatus.restype = ExecStatusType
@@ -172,6 +176,10 @@ PQfname = libpq.PQfname
 PQfname.argtypes = [PGresult_p, c_int]
 PQfname.restype = c_char_p
 
+PQfformat = libpq.PQfformat
+PQfformat.argtypes = [PGresult_p, c_int]
+PQfformat.restype = c_int
+
 PQftype = libpq.PQftype
 PQftype.argtypes = [PGresult_p, c_int]
 PQftype.restype = c_uint
@@ -192,9 +200,18 @@ PQgetlength = libpq.PQgetlength
 PQgetlength.argtypes = [PGresult_p, c_int, c_int]
 PQgetlength.restype = c_int
 
-PQgetvalue = libpq.PQgetvalue
-PQgetvalue.argtypes = [PGresult_p, c_int, c_int]
-PQgetvalue.restype = c_char_p
+#PQgetvalue = libpq.PQgetvalue
+#PQgetvalue.argtypes = [PGresult_p, c_int, c_int]
+#PQgetvalue.restype = c_char_p
+
+PQgetvalueb = libpq.PQgetvalue
+PQgetvalueb.argtypes = [PGresult_p, c_int, c_int]
+PQgetvalueb.restype = POINTER(c_char)
+
+# XXX Not everyone's ready for binary results...
+def PQgetvalue(*args, **kwargs):
+    val = PQgetvalueb(*args, **kwargs)
+    return cast(val, c_char_p).value
 
 # Retrieving other result information
 
