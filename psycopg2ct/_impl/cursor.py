@@ -660,7 +660,7 @@ class Cursor(object):
 
         else:
             with self._conn._lock:
-                ret = libpq.PQsendQuery(pgconn, query)
+                ret = libpq.PQsendQueryParams(pgconn, query, 0, None, None, None, None, 1)
                 if not ret:
 
                     # XXX: check if this is correct, seems like a hack.
@@ -822,7 +822,7 @@ class Cursor(object):
 
             # PQgetvalue will return an empty string for null values,
             # so check with PQgetisnull if the value is really null
-            val = libpq.PQgetvalueb(self._pgres, row_num, i)
+            val = libpq.PQgetvalue(self._pgres, row_num, i)
             if libpq.PQgetisnull(self._pgres, row_num, i):
                 val = None
             else:
@@ -836,12 +836,9 @@ class Cursor(object):
 
     def _get_cast(self, oid, ffmt=0):
         try:
-            if ffmt:
-                return typecasts.binary_types[oid]
-            else:
-                return typecasts.string_types[oid]
+            return typecasts.binary_types[oid]
         except KeyError:
-            return typecasts.string_types[705]
+            return typecasts.binary_types[705]
 
 
 def _combine_cmd_params(cmd, params, conn):
