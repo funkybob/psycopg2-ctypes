@@ -185,11 +185,13 @@ class Connection(object):
             if _green_callback:
                 pgres = self._execute_green(query)
             else:
-                pgres = libpq.PQexec(self._pgconn, query)
+                # This one pretends the world is still text
+                pgres = libpq.PQexecParams(self._pgconn, query, 0, None, None, None, None, 0)
 
             if not pgres or libpq.PQresultStatus(pgres) != libpq.PGRES_TUPLES_OK:
                 raise exceptions.OperationalError("can't fetch %s" % name)
-            rv = libpq.PQgetvalue(pgres, 0, 0)
+            l = libpq.PQfsize(pgres, 0)
+            rv = libpq.PQgetvalue(pgres, 0, 0)[:l]
             libpq.PQclear(pgres)
             return rv
 
@@ -620,7 +622,7 @@ class Connection(object):
 
         self._async_cursor = True
 
-        if not libpq.PQsendQuery(self._pgconn, query):
+        if not libpq.PQsendQueryParams(self._pgconn, query, 0, None, None, None, None, 1):
             self._async_cursor = None
             return
 
