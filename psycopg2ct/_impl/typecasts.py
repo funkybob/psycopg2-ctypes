@@ -6,8 +6,6 @@ from time import localtime
 from psycopg2ct._impl import libpq
 
 
-string_types = {}
-
 binary_types = {}
 
 
@@ -27,8 +25,8 @@ class Type(object):
         return self.caster(value, length, cursor)
 
 
-def register_type(type_obj, scope=None, fmt=0):
-    typecasts = binary_types if fmt else string_types
+def register_type(type_obj, scope=None):
+    typecasts = binary_types
     if scope:
         from psycopg2ct._impl.connection import Connection
         from psycopg2ct._impl.cursor import Cursor
@@ -57,53 +55,8 @@ def typecast(caster, value, length, cursor):
     return caster.cast(value, cursor, length)
 
 
-def parse_unknown(value, length, cursor):
-    if value != '{}':
-        return value
-    else:
-        return []
 
-
-def parse_string(value, length, cursor):
-    return value
-
-
-def parse_longinteger(value, length, cursor):
-    return long(value)
-
-
-def parse_integer(value, length, cursor):
-    return int(value)
-
-
-def parse_float(value, length, cursor):
-    return float(value)
-
-
-def parse_decimal(value, length, cursor):
-    return decimal.Decimal(value)
-
-
-def parse_binary(value, length, cursor):
-    to_length = libpq.c_uint()
-    s = libpq.PQunescapeBytea(value, libpq.pointer(to_length))
-    try:
-        res = buffer(s[:to_length.value])
-    finally:
-        libpq.PQfreemem(s)
-    return res
-
-
-def parse_boolean(value, length, cursor):
-    """Typecast the postgres boolean to a python boolean.
-
-    Postgres returns the boolean as a string with 'true' or 'false'
-
-    """
-    return value[0] == "t"
-
-
-class parse_array(object):
+class _parse_array(object):
     """Parse an array of a items using an configurable caster for the items
 
     The array syntax is defined as::
@@ -174,243 +127,47 @@ class parse_array(object):
         return stack[-1]
 
 
-def parse_unicode(value, length, cursor):
-    """Decode the given value with the connection encoding"""
-    return value.decode(cursor._conn._py_enc)
 
-
-def _parse_date(value):
-    return datetime.date(*[int(x) for x in value.split('-')])
-
-
-def _parse_time(value, cursor):
-    """Parse the time to a datetime.time type.
-
-    The given value is in the format of `16:28:09.506488+01`
-
-    """
-    microsecond = 0
-    hour, minute, second = value.split(':', 2)
-
-    sign = 0
-    tzinfo = None
-    timezone = None
-    if '-' in second:
-        sign = -1
-        second, timezone = second.split('-')
-    elif '+' in second:
-        sign = 1
-        second, timezone = second.split('+')
-
-    if not cursor.tzinfo_factory is None and sign:
-        parts = timezone.split(':')
-        tz_min = sign * 60 * int(parts[0])
-        if len(parts) > 1:
-            tz_min += int(parts[1])
-        if len(parts) > 2:
-            tz_min += int(int(parts[2]) / 60.0)
-        tzinfo = cursor.tzinfo_factory(tz_min)
-
-    if '.' in second:
-        second, microsecond = second.split('.')
-        microsecond = int(microsecond) * int(math.pow(10.0, 6.0 - len(microsecond)))
-
-    return datetime.time(int(hour), int(minute), int(second), microsecond,
-        tzinfo)
-
-
-def parse_datetime(value, length, cursor):
-    date, time = value.split(' ')
-    date = _parse_date(date)
-    time = _parse_time(time, cursor)
-    return datetime.datetime.combine(date, time)
-
-
-def parse_date(value, length, cursor):
-    return _parse_date(value)
-
-
-def parse_time(value, length, cursor):
-    return _parse_time(value, cursor)
-
-
-def parse_interval(value, length, cursor):
-    """Typecast an interval to a datetime.timedelta instance.
-
-    For example, the value '2 years 1 mon 3 days 10:01:39.100' is converted
-    to `datetime.timedelta(763, 36099, 100)`.
-
-    """
-    years = months = days = 0
-    hours = minutes = seconds = hundreths = 0.0
-    v = 0.0
-    sign = 1
-    denominator = 1.0
-    part = 0
-    skip_to_space = False
-
-    s = value
-    for c in s:
-        if skip_to_space:
-            if c == " ":
-                skip_to_space = False
-            continue
-        if c == "-":
-            sign = -1
-        elif "0" <= c <= "9":
-            v = v * 10 + ord(c) - ord("0")
-            if part == 6:
-                denominator *= 10
-        elif c == "y":
-            if part == 0:
-                years = int(v * sign)
-                skip_to_space = True
-                v = 0.0
-                sign = 1
-                part = 1
-        elif c == "m":
-            if part <= 1:
-                months = int(v * sign)
-                skip_to_space = True
-                v = 0.0
-                sign = 1
-                part = 2
-        elif c == "d":
-            if part <= 2:
-                days = int(v * sign)
-                skip_to_space = True
-                v = 0.0
-                sign = 1
-                part = 3
-        elif c == ":":
-            if part <= 3:
-                hours = v
-                v = 0.0
-                part = 4
-            elif part == 4:
-                minutes = v
-                v = 0.0
-                part = 5
-        elif c == ".":
-            if part == 5:
-                seconds = v
-                v = 0.0
-                part = 6
-
-    if part == 4:
-        minutes = v
-    elif part == 5:
-        seconds = v
-    elif part == 6:
-        hundreths = v / denominator
-
-    if sign < 0.0:
-        seconds = - (hundreths + seconds + minutes * 60 + hours * 3600)
-    else:
-        seconds += hundreths + minutes * 60 + hours * 3600
-
-    days += years * 365 + months * 30
-    micro = (seconds - math.floor(seconds)) * 1000000.0
-    seconds = int(math.floor(seconds))
-    return datetime.timedelta(days, seconds, int(micro))
-
-
-
-def Date(year, month, day):
-    from psycopg2ct.extensions.adapters import DateTime
-    date = datetime.date(year, month, day)
-    return DateTime(date)
-
-
-def DateFromTicks(ticks):
-    tm = localtime()
-    return Date(tm.tm_year, tm.tm_mon, tm.tm_mday)
-
-
-def Binary(obj):
-    from psycopg2ct.extensions.adapters import Binary
-    return Binary(obj)
-
-
-def _default_type(name, oids, caster, fmt=0):
+def _default_type(name, oids, caster):
     """Shortcut to register internal types"""
     type_obj = Type(name, oids, caster)
-    register_type(type_obj, fmt=fmt)
+    register_type(type_obj)
     return type_obj
-
-# DB API 2.0 types
-BINARY = _default_type('BINARY', [17], parse_binary)
-DATETIME = _default_type('DATETIME',  [1114, 1184, 704, 1186], parse_datetime)
-NUMBER = _default_type('NUMBER', [20, 33, 21, 701, 700, 1700], parse_float)
-ROWID = _default_type('ROWID', [26], parse_integer)
-STRING = _default_type('STRING', [19, 18, 25, 1042, 1043], parse_string)
-
-# Register the basic typecasters
-BOOLEAN = _default_type('BOOLEAN', [16], parse_boolean)
-DATE = _default_type('DATE', [1082], parse_date)
-DECIMAL = _default_type('DECIMAL', [1700], parse_decimal)
-FLOAT = _default_type('FLOAT', [701, 700], parse_float)
-INTEGER = _default_type('INTEGER', [23, 21], parse_integer)
-INTERVAL = _default_type('INTERVAL', [704, 1186], parse_interval)
-LONGINTEGER = _default_type('LONGINTEGER', [20], parse_longinteger)
-TIME = _default_type('TIME', [1083, 1266], parse_time)
-UNKNOWN = _default_type('UNKNOWN', [705], parse_unknown)
-
-# Array types
-BINARYARRAY = _default_type(
-    'BINARYARRAY', [1001], parse_array(BINARY))
-BOOLEANARRAY = _default_type(
-    'BOOLEANARRAY', [1000], parse_array(BOOLEAN))
-DATEARRAY = _default_type(
-    'DATEARRAY', [1182], parse_array(DATE))
-DATETIMEARRAY = _default_type(
-    'DATETIMEARRAY', [1115, 1185], parse_array(DATETIME))
-DECIMALARRAY = _default_type(
-    'DECIMALARRAY', [1231], parse_array(DECIMAL))
-FLOATARRAY = _default_type(
-    'FLOATARRAY', [1017, 1021, 1022], parse_array(FLOAT))
-INTEGERARRAY = _default_type(
-    'INTEGERARRAY', [1005, 1006, 1007], parse_array(INTEGER))
-INTERVALARRAY = _default_type(
-    'INTERVALARRAY', [1187], parse_array(INTERVAL))
-LONGINTEGERARRAY = _default_type(
-    'LONGINTEGERARRAY', [1016], parse_array(LONGINTEGER))
-ROWIDARRAY = _default_type(
-    'ROWIDARRAY', [1013, 1028], parse_array(ROWID))
-STRINGARRAY = _default_type(
-    'STRINGARRAY', [1002, 1003, 1009, 1014, 1015], parse_array(STRING))
-TIMEARRAY = _default_type(
-    'TIMEARRAY', [1183, 1270], parse_array(TIME))
-
-
-UNICODE = Type('UNICODE', [19, 18, 25, 1042, 1043], parse_unicode)
-UNICODEARRAY = Type('UNICODEARRAY', [1002, 1003, 1009, 1014, 1015], parse_array(UNICODE))
 
 ###
 from ctypes import *
 import struct
 from pytz import utc
 
+def parse_bytea(value, length, cursor):
+    return buffer(value[:length])
+    
 def parse_int(value, length, cursor):
+    if length == -1:
+        return None
     if length == 2:
         return struct.unpack('!h', value[:length])[0]
     if length == 4:
         return struct.unpack('!i', value[:length])[0]
     if length == 8:
         return struct.unpack("!q", value[:length])[0]
-    raise ValueError('Unexpected length for INT type: %d' % length)
+    raise ValueError('Unexpected length for INT type: %r' % length)
 
 def parse_bool(value, length, cursor):
     return value[0] == '\x01'
 
 def parse_float(value, length, cursor):
+    if length == -1:
+        return None
     if length == 4:
         return struct.unpack('!q', value[:length])[0]
     if length == 8:
         return struct.unpack('!d', value[:length])[0]
-    raise ValueError('Unexpected length for FLOAT type: %d' % length)
+    raise ValueError('Unexpected length for FLOAT type: %r' % length)
 
 def parse_numeric(value, length, cursor):
+    if length == -1:
+        return None
     num_digits, weight, sign, dscale = struct.unpack("!hhhh", value[:8])
     digits = struct.unpack("!" + ("h" * num_digits), value[8:length])
     weight = decimal.Decimal(weight)
@@ -428,6 +185,7 @@ integer_datetimes = False
 integer_datetimes = True
 
 def parse_timestamp(value, length, cursor):
+    assert length == 8, 'Invalid timestamp length: %d (%r)' % (length, value[:length])
     if integer_datetimes:
         # data is 64-bit integer representing milliseconds since 2000-01-01
         val = struct.unpack('!q', value[:length])[0]
@@ -442,8 +200,8 @@ def parse_timestamptz(value, length, cursor):
     return parse_timestamp(value, length, cursor)
     #return parse_timestamp(value, length, cursor).replace(tzinfo=utc)
 
-def parse_bunicode(value, length, cursor):
-    return parse_unicode(value[:length], length, cursor)
+def parse_unicode(value, length, cursor):
+    return str(value[:length]).decode(cursor._conn._py_enc)
 
 def parse_interval(value, length, cursor):
     if integer_datetimes:
@@ -477,24 +235,103 @@ def parse_record(value, length, cursor):
         result.append(
             typecast(binary_types[oid], val, olen, cursor)
         )
-    return result
+    return tuple(result)
 
 def parse_inet(value, length, cursor):
     ip_family, ip_bits, is_cidr, dlen = struct.unpack('bbb', value[:3])
     addr = struct.unpack('b' * dlen, value[3:length])
-    needs['inet'].append(
-        (ip_family, ip_bits, is_cidr, dlen, addr,)
-    )
     return ''
 
-B_INT = _default_type('B_INT', [20, 21, 23], parse_int, 1)
-B_UNICODE = _default_type('B_UNICODE', [19, 18, 25, 1042, 1043], parse_bunicode, 1)
-B_BOOL = _default_type('B_BOOL', [16], parse_bool, 1)
-B_FLOAT = _default_type('B_FLOAT', [700, 701], parse_float, 1)
-B_NUMERIC = _default_type('B_NUMERIC', [1700], parse_numeric, 1)
-B_DATE = _default_type('B_DATE', [1082], parse_date, 1)
-B_TIMESTAMP = _default_type('B_TIMESTAMP', [1115], parse_timestamp, 1)
-B_TIMESTAMPTZ = _default_type('B_TIMESTAMPTZ', [1184], parse_timestamptz, 1)
-B_INTERVAL = _default_type('B_INTERVAL', [1186], parse_interval, 1)
-B_RECORD = _default_type('B_RECORD', [2249], parse_record, 1)
-B_INET = _default_type('B_INET', [869], parse_inet, 1)
+def parse_unk(value, length, cursor):
+    # XXX
+    return None
+
+def parse_array(obj):
+
+    def inner(value, length, cursor):
+        # Flags only contains 'has null' flag
+        ndim, flags, oid = struct.unpack('!iii', value[:12])
+        # Dimension offset
+        offset = 12
+        # Data offset
+        doffset = offset + ndim * 8
+        data = []
+        for x in range(ndim):
+            dim = struct.unpack('!ii', value[offset:offset+8])
+            offset += 8
+            vals = []
+            for y in range(dim[1]+1):
+                l = struct.unpack('!i', value[doffset:doffset+4])[0]
+                doffset += 4
+                vals.append(
+                    obj.cast(value[doffset:doffset+l], cursor, l)
+                )
+                doffset += l
+            data.append(vals)
+
+        if ndim == 1:
+            return data[0]
+        return data
+    return inner
+
+def parse_void(value, length, cursor):
+    return None
+
+def parse_time(value, length, cursor):
+    return parse_debug(value, length, cursor)
+
+# XXX
+def parse_debug(value, length, cursor):
+    return None
+
+# DB API 2.0 types
+BINARY = _default_type('BINARY', [17], parse_bytea)
+#DATETIME = _default_type('DATETIME',  [1114, 1184, 704, 1186], parse_datetime)
+# XXX This overlaps with INTEGER, FLOAT, and DECIMAL
+#NUMBER = _default_type('NUMBER', [20, 33, 21, 701, 700, 1700], parse_float)
+ROWID = _default_type('ROWID', [26], parse_int)
+#STRING = _default_type('STRING', [19, 18, 25, 1042, 1043], parse_string)
+UNICODE = _default_type('UNICODE', [19, 18, 25, 1042, 1043], parse_unicode)
+STRING = UNICODE
+
+# Register the basic typecasters
+BOOLEAN = _default_type('BOOLEAN', [16], parse_bool)
+#DATE = _default_type('DATE', [1082], parse_date)
+DECIMAL = _default_type('DECIMAL', [1700], parse_numeric)
+FLOAT = _default_type('FLOAT', [700, 701], parse_float)
+INTEGER = _default_type('INTEGER', [20, 21, 23], parse_int)
+NUMBER = INTEGER
+#INTERVAL = _default_type('INTERVAL', [704, 1186], parse_interval)
+INTERVAL = _default_type('INTERVAL', [1186], parse_interval)
+LONGINTEGER = INTEGER
+#TIME = _default_type('TIME', [1083, 1266], parse_time)
+TIME = _default_type('TIME', [], parse_time)
+UNKNOWN = _default_type('UNKNOWN', [705], parse_unk)
+
+
+DATE = _default_type('DATE', [1082], parse_date)
+TIMESTAMP = _default_type('TIMESTAMP', [1115], parse_timestamp)
+DATETIME = TIMESTAMP
+TIMESTAMPTZ = _default_type('TIMESTAMPTZ', [1184], parse_timestamptz)
+RECORD = _default_type('RECORD', [2249], parse_record)
+INET = _default_type('INET', [869], parse_inet)
+#ARRAY = _default_type('ARRAY', [1001], parse_array_binary(INTEGER))
+#ARRAY_INT = _default_type('ARRAY_INT', [1005, 1006, 1007], parse_array_binary(INTEGER))
+#ARRAY_TEXT = _default_type('ARRAY_TEXT', [1009], parse_array_binary(UNICODE))
+VOID = _default_type('VOID', [2278], parse_void)
+
+# Array types
+BINARYARRAY = _default_type('BINARYARRAY', [1001], parse_array(BINARY))
+BOOLEANARRAY = _default_type('BOOLEANARRAY', [1000], parse_array(BOOLEAN))
+DATEARRAY = _default_type('DATEARRAY', [1182], parse_array(DATE))
+DATETIMEARRAY = _default_type('DATETIMEARRAY', [1115, 1185], parse_array(DATETIME))
+DECIMALARRAY = _default_type('DECIMALARRAY', [1231], parse_array(DECIMAL))
+FLOATARRAY = _default_type('FLOATARRAY', [1017, 1021, 1022], parse_array(FLOAT))
+INTEGERARRAY = _default_type('INTEGERARRAY', [1005, 1006, 1007], parse_array(INTEGER))
+INTERVALARRAY = _default_type('INTERVALARRAY', [1187], parse_array(INTERVAL))
+LONGINTEGERARRAY = _default_type('LONGINTEGERARRAY', [1016], parse_array(LONGINTEGER))
+ROWIDARRAY = _default_type('ROWIDARRAY', [1013, 1028], parse_array(ROWID))
+STRINGARRAY = _default_type('STRINGARRAY', [1002, 1003, 1009, 1014, 1015], parse_array(STRING))
+TIMEARRAY = _default_type('TIMEARRAY', [1183, 1270], parse_array(TIME))
+UNICODEARRAY = Type('UNICODEARRAY', [1002, 1003, 1009, 1014, 1015], parse_array(UNICODE))
+
