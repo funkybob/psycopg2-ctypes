@@ -200,18 +200,9 @@ PQgetlength = libpq.PQgetlength
 PQgetlength.argtypes = [PGresult_p, c_int, c_int]
 PQgetlength.restype = c_int
 
-#PQgetvalue = libpq.PQgetvalue
-#PQgetvalue.argtypes = [PGresult_p, c_int, c_int]
-#PQgetvalue.restype = c_char_p
-
-PQgetvalueb = libpq.PQgetvalue
-PQgetvalueb.argtypes = [PGresult_p, c_int, c_int]
-PQgetvalueb.restype = POINTER(c_char)
-
-# XXX Not everyone's ready for binary results...
-def PQgetvalue(*args, **kwargs):
-    val = PQgetvalueb(*args, **kwargs)
-    return cast(val, c_char_p).value
+PQgetvalue = libpq.PQgetvalue
+PQgetvalue.argtypes = [PGresult_p, c_int, c_int]
+PQgetvalue.restype = POINTER(c_char)
 
 # Retrieving other result information
 
@@ -259,6 +250,10 @@ PQunescapeBytea.restype = POINTER(c_char)
 PQsendQuery = libpq.PQsendQuery
 PQsendQuery.argtypes = [PGconn_p, c_char_p]
 PQsendQuery.restype = c_int
+
+PQsendQueryParams = libpq.PQsendQueryParams
+PQsendQueryParams.argtypes = [PGconn_p, c_char_p, c_int, POINTER(c_int), POINTER(c_char_p), POINTER(c_int), POINTER(c_int), c_int]
+PQsendQueryParams.restype = c_int
 
 PQgetResult = libpq.PQgetResult
 PQgetResult.argtypes = [PGconn_p]
