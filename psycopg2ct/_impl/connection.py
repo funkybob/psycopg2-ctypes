@@ -191,7 +191,7 @@ class Connection(object):
             if not pgres or libpq.PQresultStatus(pgres) != libpq.PGRES_TUPLES_OK:
                 raise exceptions.OperationalError("can't fetch %s" % name)
             l = libpq.PQfsize(pgres, 0)
-            rv = libpq.PQgetvalue(pgres, 0, 0)[:l]
+            rv = str(libpq.PQgetvalue(pgres, 0, 0)[:l]).decode(self._py_enc)
             libpq.PQclear(pgres)
             return rv
 
