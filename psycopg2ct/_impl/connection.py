@@ -6,6 +6,7 @@ from psycopg2ct._impl import consts
 from psycopg2ct._impl import encodings as _enc
 from psycopg2ct._impl import exceptions
 from psycopg2ct._impl import libpq
+from psycopg2ct._impl import typecasts
 from psycopg2ct._impl import util
 from psycopg2ct._impl.cursor import Cursor
 from psycopg2ct._impl.lobject import LargeObject
@@ -186,12 +187,12 @@ class Connection(object):
                 pgres = self._execute_green(query)
             else:
                 # This one pretends the world is still text
-                pgres = libpq.PQexecParams(self._pgconn, query, 0, None, None, None, None, 0)
+                pgres = libpq.PQexec(self._pgconn, query)
 
             if not pgres or libpq.PQresultStatus(pgres) != libpq.PGRES_TUPLES_OK:
                 raise exceptions.OperationalError("can't fetch %s" % name)
             l = libpq.PQfsize(pgres, 0)
-            rv = str(libpq.PQgetvalue(pgres, 0, 0)[:l]).decode(self._py_enc)
+            rv = typecasts.parse_string(libpq.PQgetvalue(pgres, 0, 0), l, None)
             libpq.PQclear(pgres)
             return rv
 
