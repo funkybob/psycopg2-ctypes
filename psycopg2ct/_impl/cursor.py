@@ -12,6 +12,7 @@ from psycopg2ct._impl import util
 from psycopg2ct._impl.adapters import _getquoted
 from psycopg2ct._impl.exceptions import InterfaceError, ProgrammingError
 
+
 def check_closed(func):
     """Check if the connection is closed and raise an error"""
     @wraps(func)
@@ -721,7 +722,6 @@ class Cursor(object):
             description = []
             casts = []
             for i in xrange(self._nfields):
-                ffmt = libpq.PQfformat(self._pgres, i)
                 ftype = libpq.PQftype(self._pgres, i)
                 fsize = libpq.PQfsize(self._pgres, i)
                 fmod = libpq.PQfmod(self._pgres, i)
@@ -742,7 +742,7 @@ class Cursor(object):
                 else:
                     prec = scale = None
 
-                casts.append(self._get_cast(ftype, ffmt))
+                casts.append(self._get_cast(ftype))
                 description.append(Column(
                     name=libpq.PQfname(self._pgres, i),
                     type_code=ftype,
@@ -791,7 +791,7 @@ class Cursor(object):
             if length > 0:
                 value = buf.contents.value
                 if is_text:
-                    value = typecasts.parse_unicode(value, length, self)
+                    value = typecasts.parse_string(value, length, self)
                 libpq.PQfreemem(buf.contents)
 
                 if value is None:
@@ -834,11 +834,17 @@ class Cursor(object):
             return tuple(row)
         return row
 
-    def _get_cast(self, oid, ffmt=0):
+    def _get_cast(self, oid):
         try:
-            return typecasts.binary_types[oid]
+            return self._typecasts[oid]
         except KeyError:
-            return typecasts.binary_types[705]
+            try:
+                return self._conn._typecasts[oid]
+            except KeyError:
+                try:
+                    return typecasts.binary_types[oid]
+                except KeyError:
+                    return typecasts.binary_types[705]
 
 
 def _combine_cmd_params(cmd, params, conn):
